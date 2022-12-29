@@ -7,10 +7,20 @@ import (
 	"github.com/avast/retry-go/v4"
 )
 
+type OnRetryFunc func(attempt uint, err error)
+
+type ExecuteFunc retry.RetryableFunc
+
 type IRetryPolicy interface {
-	Retry(retryableFunc retry.RetryableFunc) RetryErrors
+	Retry(execute ExecuteFunc) RetryErrors
 	SetAttempts(attempts uint) IRetryPolicy
 	SetDelay(delay time.Duration) IRetryPolicy
+}
+
+type RetryPolicy struct {
+	attempts uint
+	delay    time.Duration
+	onRetry  OnRetryFunc
 }
 
 func (policy *RetryPolicy) SetAttempts(attempts uint) IRetryPolicy {
@@ -23,7 +33,11 @@ func (policy *RetryPolicy) SetDelay(delay time.Duration) IRetryPolicy {
 	return policy
 }
 
-func (policy *RetryPolicy) onRetry(retryErrors *RetryErrors) func(attempt uint, err error) {
+func (policy *RetryPolicy) OnRetry(onRetry OnRetryFunc) {
+	policy.onRetry = onRetry
+}
+
+func (policy *RetryPolicy) addRetryError(retryErrors *RetryErrors) func(attempt uint, err error) {
 	return func(attempt uint, err error) {
 		retryErr := RetryError{
 			Attempt: attempt,
@@ -33,21 +47,18 @@ func (policy *RetryPolicy) onRetry(retryErrors *RetryErrors) func(attempt uint, 
 	}
 }
 
-func (policy RetryPolicy) Retry(retryableFunc retry.RetryableFunc) RetryErrors {
+func (policy RetryPolicy) Retry(execute ExecuteFunc) RetryErrors {
 	retryErrors := make(RetryErrors, 0)
 
-	retry.Do(retryableFunc,
-		retry.OnRetry(policy.onRetry(&retryErrors)),
+	exec := retry.RetryableFunc(execute)
+
+	retry.Do(exec,
+		retry.OnRetry(policy.addRetryError(&retryErrors)),
 		retry.Attempts(policy.attempts),
 		retry.Delay(policy.delay),
 	)
 
 	return retryErrors
-}
-
-type RetryPolicy struct {
-	attempts uint
-	delay    time.Duration
 }
 
 func NewRetryPolicy() IRetryPolicy {
